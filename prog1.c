@@ -27,9 +27,9 @@ int customers_count = 0;
 pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 int sale_counter = 1;
 
-// Загрузка товаров из файла products.txt
+// Загрузка товаров из файла товары.txt
 int load_products() {
-    FILE* file = fopen("products.txt", "r");
+    FILE* file = fopen("товары.txt", "r");
     if (file == NULL) return 0;
     
     int count = 0;
@@ -55,9 +55,9 @@ int load_products() {
     return count;
 }
 
-// Загрузка покупателей из файла customers.txt
+// Загрузка покупателей из файла покупатели.txt
 int load_customers() {
-    FILE* file = fopen("customers.txt", "r");
+    FILE* file = fopen("покупатели.txt", "r");
     if (file == NULL) return 0;
     
     int count = 0;
@@ -112,8 +112,8 @@ void* simulate_sale(void* arg) {
         // Используем мьютекс для синхронизации доступа к файлу
         pthread_mutex_lock(&file_mutex);
         
-        // Записываем в файл о продажах
-        FILE* file = fopen("sales.txt", "a");
+        // Записываем в файл продажи.txt
+        FILE* file = fopen("продажи.txt", "a");
         if (file != NULL) {
             fprintf(file, "%d|%s|%s|%s|%.2f\n",
                     sale_id, datetime, customer_name, product_name, price);
@@ -136,7 +136,7 @@ int main() {
     }
     
     printf("Имитация продаж запущена (%d товаров, %d покупателей)\n", products_count, customers_count);
-    printf("Продажи записываются в файл: sales.txt\n");
+    printf("Продажи записываются в файл: продажи.txt\n");
     printf("Для остановки программы нажмите Ctrl+C\n");
     
     // Создаем 3 потока для имитации продаж

@@ -40,7 +40,7 @@ int processing_enabled = 1;
 float min_customer_sum = 10000.0;
 
 int load_products() {
-    FILE* file = fopen("products.txt", "r");
+    FILE* file = fopen("товары.txt", "r");
     if (file == NULL) return 0;
     
     int count = 0;
@@ -67,7 +67,7 @@ int load_products() {
 }
 
 int load_customers() {
-    FILE* file = fopen("customers.txt", "r");
+    FILE* file = fopen("покупатели.txt", "r");
     if (file == NULL) return 0;
     
     int count = 0;
@@ -97,7 +97,7 @@ int load_customers() {
 void update_sales_data() {
     pthread_mutex_lock(&file_mutex);
     
-    FILE* file = fopen("sales.txt", "r");
+    FILE* file = fopen("продажи.txt", "r");
     if (file != NULL) {
         // Считаем количество строк
         int count = 0;
@@ -150,7 +150,7 @@ void* calculate_total_sales(void* arg) {
                 total += sales[i].price;
             }
             
-            FILE* report = fopen("total_sales_report.txt", "w");
+            FILE* report = fopen("отчет_общая_сумма.txt", "w");
             if (report != NULL) {
                 fprintf(report, "ОТЧЕТ: ОБЩАЯ СУММА ПРОДАЖ\n");
                 fprintf(report, "---------------------------\n");
@@ -202,7 +202,7 @@ void* analyze_product_popularity(void* arg) {
                 }
             }
             
-            FILE* report = fopen("product_popularity_report.txt", "w");
+            FILE* report = fopen("отчет_популярность_товаров.txt", "w");
             if (report != NULL) {
                 fprintf(report, "ОТЧЕТ: ПОПУЛЯРНОСТЬ ТОВАРОВ\n");
                 fprintf(report, "----------------------------\n");
@@ -252,7 +252,7 @@ void* find_top_customers(void* arg) {
                 }
             }
             
-            FILE* report = fopen("top_customers_report.txt", "w");
+            FILE* report = fopen("отчет_топ_покупатели.txt", "w");
             if (report != NULL) {
                 fprintf(report, "ОТЧЕТ: ПОКУПАТЕЛИ С СУММОЙ > %.2f\n", min_customer_sum);
                 fprintf(report, "------------------------------------\n");
@@ -299,7 +299,7 @@ void* analyze_sales_trends(void* arg) {
                 }
             }
             
-            FILE* report = fopen("sales_trends_report.txt", "w");
+            FILE* report = fopen("отчет_тренды_продаж.txt", "w");
             if (report != NULL) {
                 fprintf(report, "ОТЧЕТ: ТЕНДЕНЦИИ ПРОДАЖ\n");
                 fprintf(report, "-------------------------\n");
@@ -336,10 +336,10 @@ void* analyze_sales_trends(void* arg) {
 void* user_interface_thread(void* arg) {
     printf("\n=== УПРАВЛЕНИЕ ОБРАБОТКОЙ ===\n");
     printf("Команды:\n");
-    printf("  s - остановить обработку\n");
-    printf("  r - возобновить обработку\n");
-    printf("  m - изменить минимальную сумму\n");
-    printf("  q - выйти\n");
+    printf("  S - остановить обработку\n");
+    printf("  R - возобновить обработку\n");
+    printf("  M - изменить минимальную сумму\n");
+    printf("  Q - выйти\n");
     
     char command;
     while (1) {
@@ -347,24 +347,24 @@ void* user_interface_thread(void* arg) {
         scanf(" %c", &command);
         
         switch (command) {
-            case 's':
+            case 'S':
                 processing_enabled = 0;
                 printf("Обработка остановлена\n");
                 break;
                 
-            case 'r':
+            case 'R':
                 processing_enabled = 1;
                 printf("Обработка возобновлена\n");
                 break;
                 
-            case 'm':
+            case 'M':
                 printf("Текущая минимальная сумма: %.2f\n", min_customer_sum);
                 printf("Новая сумма: ");
                 scanf("%f", &min_customer_sum);
                 printf("Установлена сумма: %.2f\n", min_customer_sum);
                 break;
                 
-            case 'q':
+            case 'Q':
                 printf("Выход...\n");
                 // Освобождаем память перед выходом
                 if (sales != NULL) free(sales);
@@ -389,10 +389,10 @@ int main() {
     printf("Обработка данных запущена\n");
     printf("Загружено: %d товаров, %d покупателей\n", products_count, customers_count);
     printf("Отчеты сохраняются в файлы:\n");
-    printf("  - total_sales_report.txt\n");
-    printf("  - product_popularity_report.txt\n");
-    printf("  - top_customers_report.txt\n");
-    printf("  - sales_trends_report.txt\n");
+    printf("  - отчет_общая_сумма.txt\n");
+    printf("  - отчет_популярность_товаров.txt\n");
+    printf("  - отчет_топ_покупатели.txt\n");
+    printf("  - отчет_тренды_продаж.txt\n");
     
     // Запускаем ВСЕ 5 потоков
     pthread_t threads[5];
