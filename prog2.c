@@ -1,376 +1,411 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <string.h>
+#include <unistd.h>
+#include <time.h>
 
-#define MAX_LENGTH 100
-#define TOP_N 5
-
-// Структура для покупателя
-typedef struct {
-    int code;
-    char name[MAX_LENGTH];
-    char phone[MAX_LENGTH];
-} Customer;
-
-// Структура для товара
-typedef struct {
-    int code;
-    char name[MAX_LENGTH];
-    float price;
-    int quantity;
-    int sales_count;  // Добавлено для подсчета популярности
-    float total_revenue;  // Добавлено для общей выручки по товару
-} Product;
-
-// Структура для продажи
+// Структура для хранения данных о продаже
 typedef struct {
     int sale_id;
-    char datetime[MAX_LENGTH];
-    int customer_code;
-    int product_code;
+    char datetime[20];
+    char customer_name[50];
+    char product_name[50];
+    float price;
 } Sale;
 
-// Структура для статистики покупателей
+// Структуры для товаров
 typedef struct {
-    int customer_code;
-    char customer_name[MAX_LENGTH];
-    float total_spent;
-} CustomerStats;
+    int product_id;
+    char name[50];
+    float price;
+} Product;
 
-// Функции для работы с файлами (остаются без изменений)
-int read_customers(const char* filename, Customer** customers) {
-    FILE* file = fopen(filename, "r");
-    if (!file) {
-        printf("Ошибка открытия файла покупателей\n");
-        return 0;
-    }
+// Структуры для покупателей
+typedef struct {
+    int customer_id;
+    char name[50];
+    char email[50];
+} Customer;
+
+// Переменные
+Sale* sales = NULL;
+Product* products = NULL;
+Customer* customers = NULL;
+int sales_count = 0, products_count = 0, customers_count = 0;
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Переменные для управления обработкой
+int processing_enabled = 1;
+float min_customer_sum = 10000.0;
+
+int load_products() {
+    FILE* file = fopen("products.txt", "r");
+    if (file == NULL) return 0;
     
     int count = 0;
-    char buffer[256];
+    int capacity = 10;
+    products = malloc(capacity * sizeof(Product));
     
-    // Пропускаем заголовок если есть
-    fgets(buffer, sizeof(buffer), file);
-    
-    while (fgets(buffer, sizeof(buffer), file)) {
-        count++;
-    }
-    
-    rewind(file);
-    *customers = malloc(count * sizeof(Customer));
-    
-    // Пропускаем заголовок если есть
-    fgets(buffer, sizeof(buffer), file);
-    
-    for (int i = 0; i < count; i++) {
-        if (fgets(buffer, sizeof(buffer), file)) {
-            sscanf(buffer, "%d %s %s", 
-                   &(*customers)[i].code, 
-                   (*customers)[i].name, 
-                   (*customers)[i].phone);
+    char line[100];
+    while (fgets(line, sizeof(line), file)) {
+        if (count >= capacity) {
+            capacity *= 2;
+            products = realloc(products, capacity * sizeof(Product));
         }
-    }
-    
-    fclose(file);
-    return count;
-}
-
-int read_products(const char* filename, Product** products) {
-    FILE* file = fopen(filename, "r");
-    if (!file) {
-        printf("Ошибка открытия файла товаров\n");
-        return 0;
-    }
-    
-    int count = 0;
-    char buffer[256];
-    
-    while (fgets(buffer, sizeof(buffer), file)) {
-        count++;
-    }
-    
-    rewind(file);
-    *products = malloc(count * sizeof(Product));
-    
-    for (int i = 0; i < count; i++) {
-        if (fgets(buffer, sizeof(buffer), file)) {
-            sscanf(buffer, "%d %s %f %d", 
-                   &(*products)[i].code, 
-                   (*products)[i].name, 
-                   &(*products)[i].price, 
-                   &(*products)[i].quantity);
-            (*products)[i].sales_count = 0;
-            (*products)[i].total_revenue = 0;
-        }
-    }
-    
-    fclose(file);
-    return count;
-}
-
-int read_sales(const char* filename, Sale** sales) {
-    FILE* file = fopen(filename, "r");
-    if (!file) {
-        printf("Ошибка открытия файла продаж\n");
-        return 0;
-    }
-    
-    int count = 0;
-    char buffer[256];
-    
-    // Пропускаем заголовок если есть
-    fgets(buffer, sizeof(buffer), file);
-    
-    while (fgets(buffer, sizeof(buffer), file)) {
-        count++;
-    }
-    
-    rewind(file);
-    *sales = malloc(count * sizeof(Sale));
-    
-    // Пропускаем заголовок если есть
-    fgets(buffer, sizeof(buffer), file);
-    
-    for (int i = 0; i < count; i++) {
-        if (fgets(buffer, sizeof(buffer), file)) {
-            sscanf(buffer, "%d %s %d %d", 
-                   &(*sales)[i].sale_id, 
-                   (*sales)[i].datetime, 
-                   &(*sales)[i].customer_code, 
-                   &(*sales)[i].product_code);
-        }
-    }
-    
-    fclose(file);
-    return count;
-}
-
-// Поиск покупателя по коду
-Customer* find_customer_by_code(Customer* customers, int count, int code) {
-    for (int i = 0; i < count; i++) {
-        if (customers[i].code == code) {
-            return &customers[i];
-        }
-    }
-    return NULL;
-}
-
-// Поиск товара по коду
-Product* find_product_by_code(Product* products, int count, int code) {
-    for (int i = 0; i < count; i++) {
-        if (products[i].code == code) {
-            return &products[i];
-        }
-    }
-    return NULL;
-}
-
-// Функция для сравнения товаров по количеству продаж (для qsort)
-int compare_products_by_sales(const void* a, const void* b) {
-    const Product* pa = (const Product*)a;
-    const Product* pb = (const Product*)b;
-    return pb->sales_count - pa->sales_count;  // По убыванию
-}
-
-// Функция для сравнения покупателей по потраченной сумме (для qsort)
-int compare_customers_by_spent(const void* a, const void* b) {
-    const CustomerStats* ca = (const CustomerStats*)a;
-    const CustomerStats* cb = (const CustomerStats*)b;
-    if (cb->total_spent > ca->total_spent) return 1;
-    if (cb->total_spent < ca->total_spent) return -1;
-    return 0;
-}
-
-// 1. Определение самых популярных и непопулярных товаров
-void analyze_product_popularity(Product* products, int products_count, 
-                               Sale* sales, int sales_count) {
-    printf("\n=== АНАЛИЗ ПОПУЛЯРНОСТИ ТОВАРОВ ===\n");
-    
-    // Сбрасываем счетчики
-    for (int i = 0; i < products_count; i++) {
-        products[i].sales_count = 0;
-        products[i].total_revenue = 0;
-    }
-    
-    // Подсчитываем продажи для каждого товара
-    for (int i = 0; i < sales_count; i++) {
-        Product* product = find_product_by_code(products, products_count, 
-                                               sales[i].product_code);
-        if (product) {
-            product->sales_count++;
-            product->total_revenue += product->price;
-        }
-    }
-    
-    // Сортируем товары по количеству продаж
-    Product* sorted_products = malloc(products_count * sizeof(Product));
-    memcpy(sorted_products, products, products_count * sizeof(Product));
-    qsort(sorted_products, products_count, sizeof(Product), compare_products_by_sales);
-    
-    // Выводим топ-5 самых популярных товаров
-    printf("\n--- Топ-%d самых популярных товаров ---\n", TOP_N);
-    printf("Место\tТовар\t\tКол-во продаж\tВыручка\n");
-    for (int i = 0; i < TOP_N && i < products_count; i++) {
-        printf("%d\t%-12s\t%d\t\t%.2f\n", 
-               i + 1, 
-               sorted_products[i].name, 
-               sorted_products[i].sales_count,
-               sorted_products[i].total_revenue);
-    }
-    
-    // Выводим топ-5 самых непопулярных товаров
-    printf("\n--- Топ-%d самых непопулярных товаров ---\n", TOP_N);
-    printf("Место\tТовар\t\tКол-во продаж\tВыручка\n");
-    for (int i = 0; i < TOP_N && i < products_count; i++) {
-        int reverse_index = products_count - 1 - i;
-        if (reverse_index >= 0) {
-            printf("%d\t%-12s\t%d\t\t%.2f\n", 
-                   i + 1, 
-                   sorted_products[reverse_index].name, 
-                   sorted_products[reverse_index].sales_count,
-                   sorted_products[reverse_index].total_revenue);
-        }
-    }
-    
-    free(sorted_products);
-}
-
-// 2. Определение покупателей, набравших товаров на сумму более заданной
-void find_top_customers_by_spent(Customer* customers, int customers_count,
-                                Product* products, int products_count,
-                                Sale* sales, int sales_count) {
-    printf("\n=== ПОИСК КРУПНЫХ ПОКУПАТЕЛЕЙ ===\n");
-    
-    float min_amount;
-    printf("Введите минимальную сумму покупок: ");
-    scanf("%f", &min_amount);
-    
-    // Создаем массив для статистики по покупателям
-    CustomerStats* customer_stats = malloc(customers_count * sizeof(CustomerStats));
-    
-    // Инициализируем статистику
-    for (int i = 0; i < customers_count; i++) {
-        customer_stats[i].customer_code = customers[i].code;
-        strcpy(customer_stats[i].customer_name, customers[i].name);
-        customer_stats[i].total_spent = 0;
-    }
-    
-    // Подсчитываем суммы покупок для каждого покупателя
-    for (int i = 0; i < sales_count; i++) {
-        Customer* customer = find_customer_by_code(customers, customers_count, 
-                                                  sales[i].customer_code);
-        Product* product = find_product_by_code(products, products_count, 
-                                               sales[i].product_code);
         
-        if (customer && product) {
-            // Находим индекс покупателя в статистике
-            for (int j = 0; j < customers_count; j++) {
-                if (customer_stats[j].customer_code == customer->code) {
-                    customer_stats[j].total_spent += product->price;
-                    break;
+        char name[50];
+        if (sscanf(line, "%d %49s %f", &products[count].product_id, name, &products[count].price) == 3) {
+            strcpy(products[count].name, name);
+            count++;
+        }
+    }
+    
+    fclose(file);
+    products_count = count;
+    return count;
+}
+
+int load_customers() {
+    FILE* file = fopen("customers.txt", "r");
+    if (file == NULL) return 0;
+    
+    int count = 0;
+    int capacity = 10;
+    customers = malloc(capacity * sizeof(Customer));
+    
+    char line[100];
+    while (fgets(line, sizeof(line), file)) {
+        if (count >= capacity) {
+            capacity *= 2;
+            customers = realloc(customers, capacity * sizeof(Customer));
+        }
+        
+        char name[50], email[50];
+        if (sscanf(line, "%d %49s %49s", &customers[count].customer_id, name, email) == 3) {
+            strcpy(customers[count].name, name);
+            strcpy(customers[count].email, email);
+            count++;
+        }
+    }
+    
+    fclose(file);
+    customers_count = count;
+    return count;
+}
+
+void update_sales_data() {
+    pthread_mutex_lock(&file_mutex);
+    
+    FILE* file = fopen("sales.txt", "r");
+    if (file != NULL) {
+        // Считаем количество строк
+        int count = 0;
+        char buffer[256];
+        while (fgets(buffer, sizeof(buffer), file)) {
+            count++;
+        }
+        
+        // Перематываем и читаем данные
+        rewind(file);
+        
+        if (sales != NULL) free(sales);
+        sales = malloc(count * sizeof(Sale));
+        sales_count = 0;
+        
+        for (int i = 0; i < count; i++) {
+            if (fgets(buffer, sizeof(buffer), file)) {
+                char datetime[20], customer_name[50], product_name[50];
+                if (sscanf(buffer, "%d|%19[^|]|%49[^|]|%49[^|]|%f",
+                          &sales[sales_count].sale_id,
+                          datetime,
+                          customer_name,
+                          product_name,
+                          &sales[sales_count].price) == 5) {
+                    strcpy(sales[sales_count].datetime, datetime);
+                    strcpy(sales[sales_count].customer_name, customer_name);
+                    strcpy(sales[sales_count].product_name, product_name);
+                    sales_count++;
                 }
             }
         }
+        fclose(file);
+    } else {
+        sales_count = 0;
+        if (sales != NULL) free(sales);
+        sales = NULL;
     }
     
-    // Сортируем покупателей по потраченной сумме
-    qsort(customer_stats, customers_count, sizeof(CustomerStats), 
-          compare_customers_by_spent);
-    
-    // Выводим покупателей с суммой покупок больше заданной
-    printf("\nПокупатели с суммой покупок более %.2f:\n", min_amount);
-    printf("Покупатель\tОбщая сумма\n");
-    int found = 0;
-    for (int i = 0; i < customers_count; i++) {
-        if (customer_stats[i].total_spent > min_amount) {
-            printf("%s\t\t%.2f\n", 
-                   customer_stats[i].customer_name, 
-                   customer_stats[i].total_spent);
-            found = 1;
-        }
-    }
-    
-    if (!found) {
-        printf("Покупателей с суммой покупок более %.2f не найдено.\n", min_amount);
-    }
-    
-    // Также выводим общий топ покупателей
-    printf("\n--- Общий рейтинг покупателей ---\n");
-    printf("Место\tПокупатель\tОбщая сумма\n");
-    for (int i = 0; i < customers_count && i < TOP_N; i++) {
-        printf("%d\t%s\t\t%.2f\n", 
-               i + 1, 
-               customer_stats[i].customer_name, 
-               customer_stats[i].total_spent);
-    }
-    
-    free(customer_stats);
+    pthread_mutex_unlock(&file_mutex);
 }
 
-// Основная функция вывода деталей продаж (остается без изменений)
-void print_sales_details(Sale* sales, int sales_count, 
-                        Customer* customers, int customers_count,
-                        Product* products, int products_count) {
-    printf("=== ДЕТАЛЬНАЯ ИНФОРМАЦИЯ О ПРОДАЖАХ ===\n");
-    printf("ID\tДата/Время\t\tПокупатель\tТовар\tЦена\n");
-    printf("------------------------------------------------------------\n");
-    
-    float total_revenue = 0;
-    
-    for (int i = 0; i < sales_count; i++) {
-        Customer* customer = find_customer_by_code(customers, customers_count, 
-                                                  sales[i].customer_code);
-        Product* product = find_product_by_code(products, products_count, 
-                                               sales[i].product_code);
-        
-        if (customer && product) {
-            printf("%d\t%s\t%s\t%s\t%.2f\n", 
-                   sales[i].sale_id,
-                   sales[i].datetime,
-                   customer->name,
-                   product->name,
-                   product->price);
+// 1. Общая сумма продаж
+void* calculate_total_sales(void* arg) {
+    while (1) {
+        if (processing_enabled) {
+            update_sales_data();
             
-            total_revenue += product->price;
+            float total = 0;
+            for (int i = 0; i < sales_count; i++) {
+                total += sales[i].price;
+            }
+            
+            FILE* report = fopen("total_sales_report.txt", "w");
+            if (report != NULL) {
+                fprintf(report, "ОТЧЕТ: ОБЩАЯ СУММА ПРОДАЖ\n");
+                fprintf(report, "---------------------------\n");
+                fprintf(report, "Общая сумма: %.2f\n", total);
+                fprintf(report, "Кол-во продаж: %d\n", sales_count);
+                fprintf(report, "Средняя сумма: %.2f\n", sales_count > 0 ? total / sales_count : 0);
+                fclose(report);
+                
+                printf("[Общая сумма] Продаж: %d, Сумма: %.2f\n", sales_count, total);
+            }
+        }
+        sleep(5);
+    }
+    return NULL;
+}
+
+// 2. Популярные и непопулярные товары
+void* analyze_product_popularity(void* arg) {
+    while (1) {
+        if (processing_enabled) {
+            update_sales_data();
+            
+            // Считаем продажи по названиям товаров
+            int* product_sales = calloc(products_count, sizeof(int));
+            float* product_revenue = calloc(products_count, sizeof(float));
+            
+            // Подсчитываем продажи для каждого товара
+            for (int i = 0; i < sales_count; i++) {
+                for (int j = 0; j < products_count; j++) {
+                    if (strcmp(sales[i].product_name, products[j].name) == 0) {
+                        product_sales[j]++;
+                        product_revenue[j] += sales[i].price;
+                        break;
+                    }
+                }
+            }
+            
+            // Сортировка по популярности
+            int* indices = malloc(products_count * sizeof(int));
+            for (int i = 0; i < products_count; i++) indices[i] = i;
+            
+            for (int i = 0; i < products_count - 1; i++) {
+                for (int j = i + 1; j < products_count; j++) {
+                    if (product_sales[indices[i]] < product_sales[indices[j]]) {
+                        int temp = indices[i];
+                        indices[i] = indices[j];
+                        indices[j] = temp;
+                    }
+                }
+            }
+            
+            FILE* report = fopen("product_popularity_report.txt", "w");
+            if (report != NULL) {
+                fprintf(report, "ОТЧЕТ: ПОПУЛЯРНОСТЬ ТОВАРОВ\n");
+                fprintf(report, "----------------------------\n");
+                
+                fprintf(report, "\nТОП-5 популярных товаров:\n");
+                for (int i = 0; i < 5 && i < products_count; i++) {
+                    int idx = indices[i];
+                    fprintf(report, "%d. %s - %d продаж, выручка: %.2f\n",
+                            i+1, products[idx].name, product_sales[idx], product_revenue[idx]);
+                }
+                
+                fprintf(report, "\nТОП-5 непопулярных товаров:\n");
+                for (int i = products_count - 1; i >= products_count - 5 && i >= 0; i--) {
+                    int idx = indices[i];
+                    fprintf(report, "%d. %s - %d продаж, выручка: %.2f\n",
+                            products_count - i, products[idx].name, product_sales[idx], product_revenue[idx]);
+                }
+                
+                fclose(report);
+                printf("[Популярность] Анализ завершен\n");
+            }
+            
+            free(product_sales);
+            free(product_revenue);
+            free(indices);
+        }
+        sleep(7);
+    }
+    return NULL;
+}
+
+// 3. Покупатели с большой суммой покупок
+void* find_top_customers(void* arg) {
+    while (1) {
+        if (processing_enabled) {
+            update_sales_data();
+            
+            // Считаем суммы по именам покупателей
+            float* customer_totals = calloc(customers_count, sizeof(float));
+            
+            for (int i = 0; i < sales_count; i++) {
+                for (int j = 0; j < customers_count; j++) {
+                    if (strcmp(sales[i].customer_name, customers[j].name) == 0) {
+                        customer_totals[j] += sales[i].price;
+                        break;
+                    }
+                }
+            }
+            
+            FILE* report = fopen("top_customers_report.txt", "w");
+            if (report != NULL) {
+                fprintf(report, "ОТЧЕТ: ПОКУПАТЕЛИ С СУММОЙ > %.2f\n", min_customer_sum);
+                fprintf(report, "------------------------------------\n");
+                
+                int count = 0;
+                for (int i = 0; i < customers_count; i++) {
+                    if (customer_totals[i] > min_customer_sum) {
+                        fprintf(report, "%d. %s - %.2f\n",
+                                ++count, customers[i].name, customer_totals[i]);
+                    }
+                }
+                
+                if (count == 0) {
+                    fprintf(report, "Нет покупателей с суммой выше %.2f\n", min_customer_sum);
+                }
+                
+                fclose(report);
+                printf("[Покупатели] Найдено %d покупателей с суммой > %.2f\n", count, min_customer_sum);
+            }
+            
+            free(customer_totals);
+        }
+        sleep(9);
+    }
+    return NULL;
+}
+
+// 4. Анализ тенденций продаж
+void* analyze_sales_trends(void* arg) {
+    while (1) {
+        if (processing_enabled) {
+            update_sales_data();
+            
+            // Анализ по часам
+            float hourly_sales[24] = {0};
+            int hourly_count[24] = {0};
+            
+            for (int i = 0; i < sales_count; i++) {
+                int hour;
+                sscanf(sales[i].datetime, "%*d-%*d-%*d %d", &hour);
+                if (hour >= 0 && hour < 24) {
+                    hourly_sales[hour] += sales[i].price;
+                    hourly_count[hour]++;
+                }
+            }
+            
+            FILE* report = fopen("sales_trends_report.txt", "w");
+            if (report != NULL) {
+                fprintf(report, "ОТЧЕТ: ТЕНДЕНЦИИ ПРОДАЖ\n");
+                fprintf(report, "-------------------------\n");
+                
+                // Находим час с максимальными продажами
+                int max_hour = 0;
+                float max_sales = 0;
+                for (int i = 0; i < 24; i++) {
+                    if (hourly_sales[i] > max_sales) {
+                        max_sales = hourly_sales[i];
+                        max_hour = i;
+                    }
+                }
+                
+                fprintf(report, "Пиковый час продаж: %02d:00 (%.2f)\n", max_hour, max_sales);
+                fprintf(report, "\nПродажи по часам:\n");
+                for (int i = 0; i < 24; i++) {
+                    if (hourly_count[i] > 0) {
+                        fprintf(report, "%02d:00 - %d продаж, сумма: %.2f\n",
+                                i, hourly_count[i], hourly_sales[i]);
+                    }
+                }
+                
+                fclose(report);
+                printf("[Тренды] Пиковый час: %02d:00\n", max_hour);
+            }
+        }
+        sleep(11);
+    }
+    return NULL;
+}
+
+// 5. Пользовательский интерфейс для управления параметрами
+void* user_interface_thread(void* arg) {
+    printf("\n=== УПРАВЛЕНИЕ ОБРАБОТКОЙ ===\n");
+    printf("Команды:\n");
+    printf("  s - остановить обработку\n");
+    printf("  r - возобновить обработку\n");
+    printf("  m - изменить минимальную сумму\n");
+    printf("  q - выйти\n");
+    
+    char command;
+    while (1) {
+        printf("\n> ");
+        scanf(" %c", &command);
+        
+        switch (command) {
+            case 's':
+                processing_enabled = 0;
+                printf("Обработка остановлена\n");
+                break;
+                
+            case 'r':
+                processing_enabled = 1;
+                printf("Обработка возобновлена\n");
+                break;
+                
+            case 'm':
+                printf("Текущая минимальная сумма: %.2f\n", min_customer_sum);
+                printf("Новая сумма: ");
+                scanf("%f", &min_customer_sum);
+                printf("Установлена сумма: %.2f\n", min_customer_sum);
+                break;
+                
+            case 'q':
+                printf("Выход...\n");
+                // Освобождаем память перед выходом
+                if (sales != NULL) free(sales);
+                if (products != NULL) free(products);
+                if (customers != NULL) free(customers);
+                exit(0);
+                break;
+                
+            default:
+                printf("Неизвестная команда\n");
         }
     }
-    
-    printf("------------------------------------------------------------\n");
-    printf("Общая выручка: %.2f\n", total_revenue);
+    return NULL;
 }
 
 int main() {
-    Customer* customers = NULL;
-    Product* products = NULL;
-    Sale* sales = NULL;
-    
-    // Чтение данных из файлов
-    int customers_count = read_customers("customers.txt", &customers);
-    int products_count = read_products("products.txt", &products);
-    int sales_count = read_sales("sales.txt", &sales);
-    
-    if (customers_count == 0 || products_count == 0 || sales_count == 0) {
-        printf("Ошибка загрузки данных\n");
+    if (!load_products() || !load_customers()) {
+        printf("Ошибка загрузки данных!\n");
         return 1;
     }
     
-    printf("Загружено:\n");
-    printf("- Покупателей: %d\n", customers_count);
-    printf("- Товаров: %d\n", products_count);
-    printf("- Продаж: %d\n\n", sales_count);
+    printf("Обработка данных запущена\n");
+    printf("Загружено: %d товаров, %d покупателей\n", products_count, customers_count);
+    printf("Отчеты сохраняются в файлы:\n");
+    printf("  - total_sales_report.txt\n");
+    printf("  - product_popularity_report.txt\n");
+    printf("  - top_customers_report.txt\n");
+    printf("  - sales_trends_report.txt\n");
     
-    // Обработка и вывод данных
-    print_sales_details(sales, sales_count, customers, customers_count, 
-                       products, products_count);
+    // Запускаем ВСЕ 5 потоков
+    pthread_t threads[5];
+    pthread_create(&threads[0], NULL, calculate_total_sales, NULL);
+    pthread_create(&threads[1], NULL, analyze_product_popularity, NULL);
+    pthread_create(&threads[2], NULL, find_top_customers, NULL);
+    pthread_create(&threads[3], NULL, analyze_sales_trends, NULL);
+    pthread_create(&threads[4], NULL, user_interface_thread, NULL);
     
-    // Новые функции анализа
-    analyze_product_popularity(products, products_count, sales, sales_count);
-    find_top_customers_by_spent(customers, customers_count, products, products_count, 
-                               sales, sales_count);
-    
-    // Освобождение памяти
-    free(customers);
-    free(products);
-    free(sales);
+    // Ожидаем все потоки
+    for (int i = 0; i < 5; i++) {
+        pthread_join(threads[i], NULL);
+    }
     
     return 0;
 }
